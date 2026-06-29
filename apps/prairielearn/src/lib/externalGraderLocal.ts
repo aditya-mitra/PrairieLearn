@@ -97,8 +97,37 @@ export class ExternalGraderLocal implements Grader {
         try {
           logger.info(`Pulling image ${question.external_grading_image}`);
           const stream = await docker.pull(question.external_grading_image);
+
+          // Monitor the pull so we can surface progress to the client
+          const progressDetails: Record<string, { current: number; total: number }> = {};
+          let lastPercent = -1;
           await new Promise((resolve, reject) => {
-            docker.modem.followProgress(stream, (err) => (err ? reject(err) : resolve(null)));
+            docker.modem.followProgress(
+              stream,
+              (err) => (err ? reject(err) : resolve(null)),
+              (output) => {
+                if ('progressDetail' in output && output.progressDetail.total) {
+                  // Track different states (Download/Extract) separately by
+                  // making them separate keys.
+                  progressDetails[`${output.id}/${output.status}`] = output.progressDetail;
+                }
+                const current = Object.values(progressDetails).reduce(
+                  (acc, detail) => acc + detail.current,
+                  0,
+                );
+                const total = Object.values(progressDetails).reduce(
+                  (acc, detail) => acc + detail.total,
+                  0,
+                );
+                if (total > 0) {
+                  const percent = Math.floor((current / total) * 100);
+                  if (percent > lastPercent) {
+                    lastPercent = percent;
+                    emitter.emit('message', `Pulling image (${percent}%)`);
+                  }
+                }
+              },
+            );
           });
           logger.info('Successfully pulled image');
         } catch (err) {
@@ -120,6 +149,10 @@ export class ExternalGraderLocal implements Grader {
               },
             );
           }
+        } finally {
+          // Clear the pull-progress message; the remaining grading steps should
+          // fall back to the default "Grading in progress" label.
+          emitter.emit('message', null);
         }
       }
 

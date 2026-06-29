@@ -411,7 +411,9 @@ function updateStatus(
       label = 'Queued for grading ' + spinner;
       break;
     case 'grading':
-      label = 'Grading in progress ' + spinner;
+      // A free-form `message` (e.g. image-pull progress) takes the place of the
+      // default label while a job is grading; see the local external grader.
+      label = (submission.message || 'Grading in progress') + ' ' + spinner;
       break;
     case 'graded':
       label = 'Graded!';

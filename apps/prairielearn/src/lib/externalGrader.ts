@@ -85,6 +85,21 @@ export async function beginGradingJob(grading_job_id: string): Promise<void> {
       Sentry.captureException(err);
     });
   });
+  gradeRequest.on('message', (message: string | null) => {
+    // This event is only fired when running locally; for now,
+    // it shows the "image pulling" progress when in grading state
+    try {
+      externalGradingSocket.gradingJobMessageUpdated({
+        variant_id: variant.id,
+        submission_id: submission.id,
+        grading_job_id: grading_job.id,
+        message,
+      });
+    } catch (err) {
+      logger.error('Error emitting grading job message', err);
+      Sentry.captureException(err);
+    }
+  });
   gradeRequest.on('results', (gradingResult: Record<string, any>) => {
     // This event will only be fired when running locally; in production,
     // external grader results wil be delivered via SQS.

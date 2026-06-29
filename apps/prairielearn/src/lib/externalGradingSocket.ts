@@ -82,6 +82,38 @@ async function getVariantSubmissionsStatus(variant_id: string) {
   );
 }
 
+/**
+ * Emits a transient, free-form status message for a grading job that is
+ * currently `grading` (e.g. `Pulling image (42%)`). Unlike
+ * {@link gradingJobStatusUpdated}, this does not touch the database; it only
+ * pushes an ephemeral detail to connected clients. Currently only used by the
+ * local (development) external grader to surface image-pull progress.
+ */
+export function gradingJobMessageUpdated({
+  variant_id,
+  submission_id,
+  grading_job_id,
+  message,
+}: {
+  variant_id: string;
+  submission_id: string;
+  grading_job_id: string;
+  message: string | null;
+}) {
+  const eventData: StatusMessage = {
+    variant_id,
+    submissions: [
+      {
+        id: submission_id,
+        grading_job_id,
+        grading_job_status: 'grading',
+        message,
+      },
+    ],
+  };
+  namespace.to(`variant-${variant_id}`).emit('change:status', eventData);
+}
+
 export async function gradingJobStatusUpdated(grading_job_id: string) {
   try {
     const submission = await sqldb.queryRow(

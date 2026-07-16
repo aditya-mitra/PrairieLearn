@@ -22,8 +22,7 @@ WITH
         DISTINCT jsonb_build_object('id', agu.id, 'name', agu.name, 'uid', agu.uid)
       ) FILTER (
         WHERE
-          iq.requires_manual_grading
-          AND iq.assigned_grader IS NOT NULL
+          iq.assigned_grader IS NOT NULL
       ) AS assigned_graders,
       JSONB_AGG(
         DISTINCT jsonb_build_object('id', lgu.id, 'name', lgu.name, 'uid', lgu.uid)

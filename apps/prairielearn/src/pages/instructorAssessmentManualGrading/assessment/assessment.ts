@@ -23,10 +23,12 @@ import { aiGrade } from '../../../ee/lib/ai-grading/ai-grading.js';
 import { selectAssessmentQuestions } from '../../../lib/assessment-question.js';
 import { features } from '../../../lib/features/index.js';
 import { typedAsyncHandler } from '../../../lib/res-locals.js';
+import { getUrl } from '../../../lib/url.js';
 import { createAuthzMiddleware } from '../../../middlewares/authzHelper.js';
 import { selectCourseInstanceGraderStaff } from '../../../models/course-instances.js';
 
-import { ManualGradingAssessment, ManualGradingQuestionSchema } from './assessment.html.js';
+import { ManualGradingAssessment } from './assessment.html.js';
+import { ManualGradingQuestionSchema } from './assessment.types.js';
 
 const router = Router();
 const sql = loadSqlEquiv(import.meta.url);
@@ -58,6 +60,7 @@ router.get(
         courseStaff,
         num_open_instances,
         adminFeaturesEnabled: aiGradingEnabled && res.locals.is_administrator,
+        search: getUrl(req).search,
       }),
     );
   }),

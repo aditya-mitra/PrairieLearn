@@ -15,6 +15,7 @@ import {
   insertCourseInstancePermissions,
   insertCoursePermissionsByUserUid,
 } from '../models/course-permissions.js';
+import type { ManualGradingQuestion } from '../pages/instructorAssessmentManualGrading/assessment/assessment.types.js';
 import { createAssessmentQuestionTrpcClient } from '../trpc/assessmentQuestion/client.js';
 
 import {
@@ -126,10 +127,32 @@ let manualGradingAssessmentQuestionUrl: string;
 let manualGradingIQUrl: string;
 let manualGradingNextUngradedUrl: string;
 let $manualGradingPage: cheerio.CheerioAPI;
+let manualGradingTableProps: {
+  questions: ManualGradingQuestion[];
+  assessmentId: string;
+  urlPrefix: string;
+  canEdit: boolean;
+};
 let score_percent: number, score_points: number, adjust_points: number | null;
 let feedback_note: string;
 let rubric_items: RubricItem[] | undefined;
 let selected_rubric_items: number[] | undefined;
+
+function parseManualGradingTableProps($: cheerio.CheerioAPI) {
+  const dataScript = $(
+    'script[data-component-props][data-component="ManualGradingAssessmentTable"]',
+  );
+  assert.equal(dataScript.length, 1);
+  return superjson.parse<typeof manualGradingTableProps>(dataScript.text());
+}
+
+function findManualGradingQuestion(props: typeof manualGradingTableProps) {
+  const question = props.questions.find(
+    (question) => question.title === manualGradingQuestionTitle,
+  );
+  assert(question);
+  return question;
+}
 
 async function submitGradeForm(
   method: 'rubric' | 'points' | 'percentage' = 'rubric',
@@ -254,14 +277,21 @@ function checkGradingResults(assigned_grader: MockUser, grader: MockUser): void 
 
   test('manual grading page for assessment does NOT show graded instance for grading', async () => {
     setUser(mockStaff[0]);
-    const manualGradingPage = await (await fetch(manualGradingAssessmentUrl)).text();
-    $manualGradingPage = cheerio.load(manualGradingPage);
-    const row = $manualGradingPage(`tr:contains("${manualGradingQuestionTitle}")`);
-    assert.equal(row.length, 1);
-    const count = row.find('td[data-testid="iq-to-grade-count"]').text().replaceAll(/\s/g, '');
-    assert.equal(count, '0/1');
-    const nextButton = row.find('.btn:contains("next submission")');
-    assert.equal(nextButton.length, 0);
+    const $ = cheerio.load(await (await fetch(manualGradingAssessmentUrl)).text());
+    const props = parseManualGradingTableProps($);
+    const question = findManualGradingQuestion(props);
+    assert.equal(question.num_instance_questions_to_grade, 0);
+    assert.equal(question.num_instance_questions, 1);
+    assert.equal(question.num_instance_questions_assigned, 0);
+    assert.equal(question.num_instance_questions_unassigned, 0);
+    assert.deepEqual(
+      question.assigned_graders?.map((grader) => grader.id),
+      [assigned_grader.id],
+    );
+    assert.deepEqual(
+      question.actual_graders?.map((grader) => grader.id),
+      [grader.id],
+    );
   });
 
   test('next ungraded button should point to general page after grading', async () => {
@@ -587,23 +617,23 @@ describe('Manual Grading', { timeout: 80_000, concurrent: false }, function () {
         const manualGradingPage = await (await fetch(manualGradingAssessmentUrl)).text();
         $manualGradingPage = cheerio.load(manualGradingPage);
         assertAlert($manualGradingPage, 'has one open instance');
+        manualGradingTableProps = parseManualGradingTableProps($manualGradingPage);
       });
 
       test('manual grading page should list one question requiring grading', () => {
-        const row = $manualGradingPage(`tr:contains("${manualGradingQuestionTitle}")`);
-        assert.equal(row.length, 1);
-        const count = row.find('td[data-testid="iq-to-grade-count"]').text().replaceAll(/\s/g, '');
-        assert.equal(count, '1/1');
-        const nextButton = row.find('.btn:contains("next submission")');
-        assert.equal(nextButton.length, 1);
+        const question = findManualGradingQuestion(manualGradingTableProps);
+        assert.equal(question.num_instance_questions_to_grade, 1);
+        assert.equal(question.num_instance_questions, 1);
+        assert.isTrue(manualGradingTableProps.canEdit);
+        assert.isAbove(
+          question.num_instance_questions_assigned + question.num_instance_questions_unassigned,
+          0,
+        );
 
-        // Extract URLs from the HTML to verify they're correct
-        const questionLink = row.find('td:first-child a').attr('href');
-        assert(questionLink);
-        manualGradingAssessmentQuestionUrl = siteUrl + questionLink;
-        const nextUngradedLink = nextButton.attr('href');
-        assert(nextUngradedLink);
-        manualGradingNextUngradedUrl = siteUrl + nextUngradedLink;
+        manualGradingAssessmentQuestionUrl =
+          siteUrl +
+          `${manualGradingTableProps.urlPrefix}/assessment/${manualGradingTableProps.assessmentId}/manual_grading/assessment_question/${question.id}`;
+        manualGradingNextUngradedUrl = manualGradingAssessmentQuestionUrl + '/next_ungraded';
       });
 
       test('manual grading page for assessment question should warn about an open instance', async () => {
@@ -707,28 +737,28 @@ describe('Manual Grading', { timeout: 80_000, concurrent: false }, function () {
         assert.isNotOk(instanceList[0].last_grader_name);
       });
 
-      test('manual grading page should show next ungraded button for assigned grader', async () => {
+      test('manual grading page should queue work for assigned grader', async () => {
         setUser(mockStaff[0]);
-        const manualGradingPage = await (await fetch(manualGradingAssessmentUrl)).text();
-        $manualGradingPage = cheerio.load(manualGradingPage);
-        const row = $manualGradingPage(`tr:contains("${manualGradingQuestionTitle}")`);
-        assert.equal(row.length, 1);
-        const count = row.find('td[data-testid="iq-to-grade-count"]').text().replaceAll(/\s/g, '');
-        assert.equal(count, '1/1');
-        const nextButton = row.find('.btn:contains("next submission")');
-        assert.equal(nextButton.length, 1);
+        const $ = cheerio.load(await (await fetch(manualGradingAssessmentUrl)).text());
+        const question = findManualGradingQuestion(parseManualGradingTableProps($));
+        assert.equal(question.num_instance_questions_to_grade, 1);
+        assert.equal(question.num_instance_questions, 1);
+        assert.equal(question.num_instance_questions_assigned, 1);
+        assert.equal(question.num_instance_questions_unassigned, 0);
+        assert.deepEqual(
+          question.assigned_graders?.map((grader) => grader.id),
+          [mockStaff[0].id],
+        );
       });
 
-      test('manual grading page should NOT show next ungraded button for non-assigned grader', async () => {
+      test('manual grading page should not queue assigned work for another grader', async () => {
         setUser(mockStaff[1]);
-        const manualGradingPage = await (await fetch(manualGradingAssessmentUrl)).text();
-        $manualGradingPage = cheerio.load(manualGradingPage);
-        const row = $manualGradingPage(`tr:contains("${manualGradingQuestionTitle}")`);
-        assert.equal(row.length, 1);
-        const count = row.find('td[data-testid="iq-to-grade-count"]').text().replaceAll(/\s/g, '');
-        assert.equal(count, '1/1');
-        const nextButton = row.find('.btn:contains("next submission")');
-        assert.equal(nextButton.length, 0);
+        const $ = cheerio.load(await (await fetch(manualGradingAssessmentUrl)).text());
+        const question = findManualGradingQuestion(parseManualGradingTableProps($));
+        assert.equal(question.num_instance_questions_to_grade, 1);
+        assert.equal(question.num_instance_questions, 1);
+        assert.equal(question.num_instance_questions_assigned, 0);
+        assert.equal(question.num_instance_questions_unassigned, 0);
       });
 
       test('next ungraded button should point to existing instance for assigned grader', async () => {
@@ -1194,25 +1224,23 @@ describe('Manual Grading', { timeout: 80_000, concurrent: false }, function () {
         const manualGradingPage = await (await fetch(manualGradingAssessmentUrl)).text();
         $manualGradingPage = cheerio.load(manualGradingPage);
         assertAlert($manualGradingPage, 'has one open instance');
+        manualGradingTableProps = parseManualGradingTableProps($manualGradingPage);
       });
 
       test('manual grading page should list one question requiring grading', () => {
-        const row = $manualGradingPage(`tr:contains("${manualGradingQuestionTitle}")`);
-        assert.equal(row.length, 1);
-        const count = row.find('td[data-testid="iq-to-grade-count"]').text().replaceAll(/\s/g, '');
-        assert.equal(count, '1/1');
+        const question = findManualGradingQuestion(manualGradingTableProps);
+        assert.equal(question.num_instance_questions_to_grade, 1);
+        assert.equal(question.num_instance_questions, 1);
+        assert.equal(question.num_instance_questions_assigned, 0);
+        assert.equal(question.num_instance_questions_unassigned, 0);
+        assert.deepEqual(
+          question.assigned_graders?.map((grader) => grader.id),
+          [mockStaff[0].id],
+        );
 
-        // Extract URLs from the HTML to verify they're correct
-        const questionLink = row.find('td:first-child a').attr('href');
-        assert(questionLink);
-        manualGradingAssessmentQuestionUrl = siteUrl + questionLink;
-
-        // The "next submission" button only shows if the current user has questions assigned to them
-        // or if there are unassigned questions. The current user, "defaultUser",
-        // does not have any questions assigned to them,
-        // because it was assigned to "mockStaff[0]" in the previous test.
-        const nextButton = row.find('.btn:contains("next submission")');
-        assert.equal(nextButton.length, 0);
+        manualGradingAssessmentQuestionUrl =
+          siteUrl +
+          `${manualGradingTableProps.urlPrefix}/assessment/${manualGradingTableProps.assessmentId}/manual_grading/assessment_question/${question.id}`;
         manualGradingNextUngradedUrl = manualGradingAssessmentQuestionUrl + '/next_ungraded';
       });
 
